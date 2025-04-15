@@ -85,6 +85,6 @@ func (c *clientImpl) Request(method, url string, rqBody []byte, rsBody any, opti
 			return fmt.Errorf("error unmarshalling response body: %w", err)
 		}
 
-		return ParseError(&r)
+		return parseError(response.StatusCode, &r)
 	}
 }

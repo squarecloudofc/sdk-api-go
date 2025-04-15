@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -19,7 +20,7 @@ var (
 	ErrDelayNow      RestError = errors.New("you are in rate limit, try again later")
 )
 
-func ParseError(e *squarecloud.APIResponse[any]) (err error) {
+func parseError(statusCode int, e *squarecloud.APIResponse[any]) (err error) {
 	switch e.Code {
 	case "APP_NOT_FOUND":
 		err = ErrAppNotFound
@@ -36,7 +37,12 @@ func ParseError(e *squarecloud.APIResponse[any]) (err error) {
 	case "DELAY_NOW", "RATELIMIT":
 		err = ErrDelayNow
 	default:
-		err = fmt.Errorf("square cloud returned error %s %s", e.Code, e.Message)
+		data, marshalErr := json.Marshal(e)
+		if marshalErr != nil {
+			err = fmt.Errorf("square cloud returned status code %s with error %s %s", statusCode, e.Code, e.Message)
+		}
+
+		err = fmt.Errorf("square cloud returned status code %s with error %s", string(data))
 	}
 
 	return
