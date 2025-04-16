@@ -39,10 +39,11 @@ func parseError(statusCode int, e *squarecloud.APIResponse[any]) (err error) {
 	default:
 		data, marshalErr := json.Marshal(e)
 		if marshalErr != nil {
-			err = fmt.Errorf("square cloud returned status code %s with error %s %s", statusCode, e.Code, e.Message)
+			err = fmt.Errorf(`square cloud returned status code %d with error %s %s`, statusCode, e.Code, e.Message)
+			return
 		}
 
-		err = fmt.Errorf("square cloud returned status code %s with error %s", string(data))
+		err = fmt.Errorf("square cloud returned status code %d with error %s", statusCode, string(data))
 	}
 
 	return
