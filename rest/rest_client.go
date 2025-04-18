@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/squarecloudofc/squarego/squarecloud"
+	"github.com/squarecloudofc/sdk-api-go/squarecloud"
 )
 
 type Client interface {

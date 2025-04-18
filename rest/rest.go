@@ -3,7 +3,7 @@ package rest
 import (
 	"net/http"
 
-	"github.com/squarecloudofc/squarego/squarecloud"
+	"github.com/squarecloudofc/sdk-api-go/squarecloud"
 )
 
 var _ Rest = (*restImpl)(nil)

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/squarecloudofc/squarego/squarecloud"
+	"github.com/squarecloudofc/sdk-api-go/squarecloud"
 )
 
 type RestError error
