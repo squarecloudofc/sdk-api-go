@@ -1,7 +1,6 @@
 package rest
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -37,13 +36,7 @@ func parseError(statusCode int, e *squarecloud.APIResponse[any]) (err error) {
 	case "DELAY_NOW", "RATELIMIT":
 		err = ErrDelayNow
 	default:
-		data, marshalErr := json.Marshal(e)
-		if marshalErr != nil {
-			err = fmt.Errorf(`square cloud returned status code %d with error %s %s`, statusCode, e.Code, e.Message)
-			return
-		}
-
-		err = fmt.Errorf("square cloud returned status code %d with error %s", statusCode, string(data))
+		err = fmt.Errorf("Square Cloud returned error %s with code %d", e.Code, statusCode)
 	}
 
 	return

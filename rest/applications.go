@@ -6,7 +6,7 @@ import (
 	"mime/multipart"
 	"net/http"
 
-	"github.com/squarecloudofc/squarego/squarecloud"
+	"github.com/squarecloudofc/sdk-api-go/squarecloud"
 )
 
 var _ Applications = (*applicationsImpl)(nil)
