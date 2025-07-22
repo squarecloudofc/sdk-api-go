@@ -5,8 +5,8 @@ import (
 )
 
 var (
-	ApiVersion = 2
-	ApiURL     = fmt.Sprintf("https://api.squarecloud.app/v%d", ApiVersion)
+	APIVersion = 2
+	APIURL     = fmt.Sprintf("https://api.squarecloud.app/v%d", APIVersion)
 )
 
 var (
@@ -19,24 +19,24 @@ var (
 	// Application
 	EndpointApplication            = func() string { return "/apps" }
 	EndpointApplicationListStatus  = func() string { return "/apps/status" }
-	EndpointApplicationInformation = func(appId string) string { return fmt.Sprintf("/apps/%s", appId) }
-	EndpointApplicationStatus      = func(appId string) string { return fmt.Sprintf("/apps/%s/status", appId) }
-	EndpointApplicationLogs        = func(appId string) string { return fmt.Sprintf("/apps/%s/logs", appId) }
-	EndpointApplicationStart       = func(appId string) string { return fmt.Sprintf("/apps/%s/start", appId) }
-	EndpointApplicationRestart     = func(appId string) string { return fmt.Sprintf("/apps/%s/restart", appId) }
-	EndpointApplicationStop        = func(appId string) string { return fmt.Sprintf("/apps/%s/stop", appId) }
-	EndpointApplicationSnapshots   = func(appId string) string { return fmt.Sprintf("/apps/%s/snapshots", appId) }
-	EndpointApplicationCommit      = func(appId string) string { return fmt.Sprintf("/apps/%s/commit", appId) }
+	EndpointApplicationInformation = func(appID string) string { return fmt.Sprintf("/apps/%s", appID) }
+	EndpointApplicationStatus      = func(appID string) string { return fmt.Sprintf("/apps/%s/status", appID) }
+	EndpointApplicationLogs        = func(appID string) string { return fmt.Sprintf("/apps/%s/logs", appID) }
+	EndpointApplicationStart       = func(appID string) string { return fmt.Sprintf("/apps/%s/start", appID) }
+	EndpointApplicationRestart     = func(appID string) string { return fmt.Sprintf("/apps/%s/restart", appID) }
+	EndpointApplicationStop        = func(appID string) string { return fmt.Sprintf("/apps/%s/stop", appID) }
+	EndpointApplicationSnapshots   = func(appID string) string { return fmt.Sprintf("/apps/%s/snapshots", appID) }
+	EndpointApplicationCommit      = func(appID string) string { return fmt.Sprintf("/apps/%s/commit", appID) }
 
 	// Application File Manager
-	EndpointApplicationFiles    = func(appId, path string) string { return fmt.Sprintf("/apps/%s/files?path=%s", appId, path) }
-	EndpointApplicationFileRead = func(appId, path string) string { return fmt.Sprintf("/apps/%s/files/content?path=%s", appId, path) }
+	EndpointApplicationFiles    = func(appID, path string) string { return fmt.Sprintf("/apps/%s/files?path=%s", appID, path) }
+	EndpointApplicationFileRead = func(appID, path string) string { return fmt.Sprintf("/apps/%s/files/content?path=%s", appID, path) }
 
 	// Application Deploy
-	EndpointApplicationDeploys           = func(appId string) string { return fmt.Sprintf("/apps/%s/deploy/list", appId) }
-	EndpointApplicationGithubIntegration = func(appId string) string { return fmt.Sprintf("/apps/%s/deploy/git-webhook", appId) }
+	EndpointApplicationDeploys           = func(appID string) string { return fmt.Sprintf("/apps/%s/deploy/list", appID) }
+	EndpointApplicationGithubIntegration = func(appID string) string { return fmt.Sprintf("/apps/%s/deploy/git-webhook", appID) }
 
 	// Application Network
-	EndpointApplicationNetwork      = func(appId string) string { return fmt.Sprintf("/apps/%s/network/analytics", appId) }
-	EndpointApplicationCustomDomain = func(appId, domain string) string { return fmt.Sprintf("/apps/%s/network/custom/%s", appId, domain) }
+	EndpointApplicationNetwork      = func(appID string) string { return fmt.Sprintf("/apps/%s/network/analytics", appID) }
+	EndpointApplicationCustomDomain = func(appID, domain string) string { return fmt.Sprintf("/apps/%s/network/custom/%s", appID, domain) }
 )

@@ -10,7 +10,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		Logger:     slog.Default(),
 		HTTPClient: &http.Client{Timeout: 30 * time.Second},
-		URL:        ApiURL,
+		URL:        APIURL,
 		UserAgent:  "Square GO",
 	}
 }

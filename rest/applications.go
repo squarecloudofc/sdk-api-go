@@ -21,32 +21,32 @@ type Applications interface {
 
 	PostApplications(reader io.Reader, options ...RequestOpt) (*squarecloud.ApplicationUploaded, error)
 
-	GetApplication(appId string, options ...RequestOpt) (squarecloud.Application, error)
-	GetApplicationStatus(appId string, options ...RequestOpt) (squarecloud.ApplicationStatus, error)
+	GetApplication(appID string, options ...RequestOpt) (squarecloud.Application, error)
+	GetApplicationStatus(appID string, options ...RequestOpt) (squarecloud.ApplicationStatus, error)
 
-	GetApplicationLogs(appId string, options ...RequestOpt) (squarecloud.ApplicationLogs, error)
-	PostApplicationSignal(appId string, signal squarecloud.ApplicationSignal, options ...RequestOpt) error
-	PostApplicationCommit(appId string, reader io.Reader, options ...RequestOpt) error
+	GetApplicationLogs(appID string, options ...RequestOpt) (squarecloud.ApplicationLogs, error)
+	PostApplicationSignal(appID string, signal squarecloud.ApplicationSignal, options ...RequestOpt) error
+	PostApplicationCommit(appID string, reader io.Reader, options ...RequestOpt) error
 
-	GetApplicationBackups(appId string, options ...RequestOpt) ([]squarecloud.ApplicationBackup, error)
-	CreateApplicationBackup(appId string, options ...RequestOpt) (squarecloud.ApplicationBackupCreated, error)
+	GetApplicationBackups(appID string, options ...RequestOpt) ([]squarecloud.ApplicationBackup, error)
+	CreateApplicationBackup(appID string, options ...RequestOpt) (squarecloud.ApplicationBackupCreated, error)
 
-	// GetApplicationFileContent(appId string, path string, options ...RequestOption) error
-	// GetApplicationFiles(appId string, path string, options ...RequestOption) error
-	// CreateApplicationFile(appId string, path string, options ...RequestOption) error
-	// PatchApplicationFile(appId string, path string, to string, options ...RequestOption) error
-	// DeleteApplicationFile(appId string, path string, options ...RequestOption) error
+	// GetApplicationFileContent(appID string, path string, options ...RequestOption) error
+	// GetApplicationFiles(appID string, path string, options ...RequestOption) error
+	// CreateApplicationFile(appID string, path string, options ...RequestOption) error
+	// PatchApplicationFile(appID string, path string, to string, options ...RequestOption) error
+	// DeleteApplicationFile(appID string, path string, options ...RequestOption) error
 
-	// GetApplicationDeployments(appId string, options ...RequestOption) error
-	// GetApplicationCurrentDeployments(appId string, options ...RequestOption) error
-	// PostApplicationDeployWebhook(appId string, options ...RequestOption) error
+	// GetApplicationDeployments(appID string, options ...RequestOption) error
+	// GetApplicationCurrentDeployments(appID string, options ...RequestOption) error
+	// PostApplicationDeployWebhook(appID string, options ...RequestOption) error
 
-	// GetApplicationDNSRecords(appId string, options ...RequestOption) error
-	// GetApplicationAnalytics(appId string, options ...RequestOption) error
-	// PostApplicationCustomDomain(appId string, options ...RequestOption) error
-	// PostApplicationPurgeCache(appId string, options ...RequestOption) error
+	// GetApplicationDNSRecords(appID string, options ...RequestOption) error
+	// GetApplicationAnalytics(appID string, options ...RequestOption) error
+	// PostApplicationCustomDomain(appID string, options ...RequestOption) error
+	// PostApplicationPurgeCache(appID string, options ...RequestOption) error
 
-	DeleteApplication(appId string, options ...RequestOpt) error
+	DeleteApplication(appID string, options ...RequestOpt) error
 }
 
 type applicationsImpl struct {
@@ -95,14 +95,14 @@ func (s *applicationsImpl) PostApplications(reader io.Reader, opts ...RequestOpt
 	return &r.Response, err
 }
 
-func (s *applicationsImpl) GetApplication(appId string, opts ...RequestOpt) (squarecloud.Application, error) {
+func (s *applicationsImpl) GetApplication(appID string, opts ...RequestOpt) (squarecloud.Application, error) {
 	var r squarecloud.APIResponse[squarecloud.Application]
-	err := s.client.Request(http.MethodGet, EndpointApplicationInformation(appId), nil, &r, opts...)
+	err := s.client.Request(http.MethodGet, EndpointApplicationInformation(appID), nil, &r, opts...)
 
 	return r.Response, err
 }
 
-func (c *applicationsImpl) PostApplicationCommit(appId string, reader io.Reader, options ...RequestOpt) error {
+func (c *applicationsImpl) PostApplicationCommit(appID string, reader io.Reader, options ...RequestOpt) error {
 	bodyBuffer := &bytes.Buffer{}
 	writer := multipart.NewWriter(bodyBuffer)
 
@@ -122,54 +122,54 @@ func (c *applicationsImpl) PostApplicationCommit(appId string, reader io.Reader,
 	options = append(options, WithHeader("Content-Type", writer.FormDataContentType()))
 
 	var r squarecloud.APIResponse[any]
-	return c.client.Request(http.MethodPost, EndpointApplicationCommit(appId), bodyBuffer.Bytes(), &r, options...)
+	return c.client.Request(http.MethodPost, EndpointApplicationCommit(appID), bodyBuffer.Bytes(), &r, options...)
 }
 
-func (s *applicationsImpl) GetApplicationStatus(appId string, opts ...RequestOpt) (squarecloud.ApplicationStatus, error) {
+func (s *applicationsImpl) GetApplicationStatus(appID string, opts ...RequestOpt) (squarecloud.ApplicationStatus, error) {
 	var r squarecloud.APIResponse[squarecloud.ApplicationStatus]
-	err := s.client.Request(http.MethodGet, EndpointApplicationStatus(appId), nil, &r, opts...)
+	err := s.client.Request(http.MethodGet, EndpointApplicationStatus(appID), nil, &r, opts...)
 
 	return r.Response, err
 }
 
-func (s *applicationsImpl) GetApplicationLogs(appId string, opts ...RequestOpt) (squarecloud.ApplicationLogs, error) {
+func (s *applicationsImpl) GetApplicationLogs(appID string, opts ...RequestOpt) (squarecloud.ApplicationLogs, error) {
 	var r squarecloud.APIResponse[squarecloud.ApplicationLogs]
-	err := s.client.Request(http.MethodGet, EndpointApplicationLogs(appId), nil, &r, opts...)
+	err := s.client.Request(http.MethodGet, EndpointApplicationLogs(appID), nil, &r, opts...)
 
 	return r.Response, err
 }
 
-func (s *applicationsImpl) PostApplicationSignal(appId string, signal squarecloud.ApplicationSignal, opts ...RequestOpt) error {
+func (s *applicationsImpl) PostApplicationSignal(appID string, signal squarecloud.ApplicationSignal, opts ...RequestOpt) error {
 	var r squarecloud.APIResponse[any]
 	var endpoint string
 
 	switch signal {
 	case squarecloud.ApplicationSignalStart:
-		endpoint = EndpointApplicationStart(appId)
+		endpoint = EndpointApplicationStart(appID)
 	case squarecloud.ApplicationSignalRestart:
-		endpoint = EndpointApplicationRestart(appId)
+		endpoint = EndpointApplicationRestart(appID)
 	case squarecloud.ApplicationSignalStop:
-		endpoint = EndpointApplicationStop(appId)
+		endpoint = EndpointApplicationStop(appID)
 	}
 
 	return s.client.Request(http.MethodPost, endpoint, nil, &r, opts...)
 }
 
-func (s *applicationsImpl) GetApplicationBackups(appId string, opts ...RequestOpt) ([]squarecloud.ApplicationBackup, error) {
+func (s *applicationsImpl) GetApplicationBackups(appID string, opts ...RequestOpt) ([]squarecloud.ApplicationBackup, error) {
 	var r squarecloud.APIResponse[[]squarecloud.ApplicationBackup]
-	err := s.client.Request(http.MethodGet, EndpointApplicationSnapshots(appId), nil, &r, opts...)
+	err := s.client.Request(http.MethodGet, EndpointApplicationSnapshots(appID), nil, &r, opts...)
 
 	return r.Response, err
 }
 
-func (s *applicationsImpl) CreateApplicationBackup(appId string, opts ...RequestOpt) (squarecloud.ApplicationBackupCreated, error) {
+func (s *applicationsImpl) CreateApplicationBackup(appID string, opts ...RequestOpt) (squarecloud.ApplicationBackupCreated, error) {
 	var r squarecloud.APIResponse[squarecloud.ApplicationBackupCreated]
-	err := s.client.Request(http.MethodPost, EndpointApplicationSnapshots(appId), nil, &r, opts...)
+	err := s.client.Request(http.MethodPost, EndpointApplicationSnapshots(appID), nil, &r, opts...)
 
 	return r.Response, err
 }
 
-func (s *applicationsImpl) DeleteApplication(appId string, opts ...RequestOpt) error {
+func (s *applicationsImpl) DeleteApplication(appID string, opts ...RequestOpt) error {
 	var r squarecloud.APIResponse[any]
-	return s.client.Request(http.MethodDelete, EndpointApplicationInformation(appId), nil, &r, opts...)
+	return s.client.Request(http.MethodDelete, EndpointApplicationInformation(appID), nil, &r, opts...)
 }
