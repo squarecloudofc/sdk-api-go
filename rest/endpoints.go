@@ -25,7 +25,7 @@ var (
 	EndpointApplicationStart       = func(appId string) string { return fmt.Sprintf("/apps/%s/start", appId) }
 	EndpointApplicationRestart     = func(appId string) string { return fmt.Sprintf("/apps/%s/restart", appId) }
 	EndpointApplicationStop        = func(appId string) string { return fmt.Sprintf("/apps/%s/stop", appId) }
-	EndpointApplicationBackup      = func(appId string) string { return fmt.Sprintf("/apps/%s/backups", appId) }
+	EndpointApplicationSnapshots   = func(appId string) string { return fmt.Sprintf("/apps/%s/snapshots", appId) }
 	EndpointApplicationCommit      = func(appId string) string { return fmt.Sprintf("/apps/%s/commit", appId) }
 
 	// Application File Manager

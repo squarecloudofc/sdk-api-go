@@ -157,14 +157,14 @@ func (s *applicationsImpl) PostApplicationSignal(appId string, signal squareclou
 
 func (s *applicationsImpl) GetApplicationBackups(appId string, opts ...RequestOpt) ([]squarecloud.ApplicationBackup, error) {
 	var r squarecloud.APIResponse[[]squarecloud.ApplicationBackup]
-	err := s.client.Request(http.MethodGet, EndpointApplicationBackup(appId), nil, &r, opts...)
+	err := s.client.Request(http.MethodGet, EndpointApplicationSnapshots(appId), nil, &r, opts...)
 
 	return r.Response, err
 }
 
 func (s *applicationsImpl) CreateApplicationBackup(appId string, opts ...RequestOpt) (squarecloud.ApplicationBackupCreated, error) {
 	var r squarecloud.APIResponse[squarecloud.ApplicationBackupCreated]
-	err := s.client.Request(http.MethodPost, EndpointApplicationBackup(appId), nil, &r, opts...)
+	err := s.client.Request(http.MethodPost, EndpointApplicationSnapshots(appId), nil, &r, opts...)
 
 	return r.Response, err
 }
