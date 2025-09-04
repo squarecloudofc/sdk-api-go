@@ -10,6 +10,7 @@ var _ Rest = (*restImpl)(nil)
 
 type Rest interface {
 	SelfUser(opts ...RequestOpt) (squarecloud.User, error)
+	UserSnapshots(snapshotType string, opts ...RequestOpt) ([]squarecloud.Snapshot, error)
 
 	Applications
 }
@@ -36,4 +37,11 @@ func (s *restImpl) SelfUser(opts ...RequestOpt) (squarecloud.User, error) {
 	err := s.Request(http.MethodGet, EndpointUser(), nil, &r, opts...)
 
 	return r.Response.User, err
+}
+
+func (s *restImpl) UserSnapshots(snapshotType string, opts ...RequestOpt) ([]squarecloud.Snapshot, error) {
+	var r squarecloud.APIResponse[[]squarecloud.Snapshot]
+	err := s.Request(http.MethodGet, EndpointUserSnapshots(snapshotType), nil, &r, opts...)
+
+	return r.Response, err
 }

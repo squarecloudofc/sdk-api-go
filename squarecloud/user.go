@@ -1,5 +1,7 @@
 package squarecloud
 
+import "time"
+
 type User struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
@@ -23,4 +25,11 @@ type UserApplication struct {
 	Cluster string `json:"cluster"`
 	Avatar  string `json:"avatar"`
 	RAM     int    `json:"ram"`
+}
+
+type Snapshot struct {
+	Name     string    `json:"name"`
+	Size     int       `json:"size"`
+	Modified time.Time `json:"modified"`
+	Key      string    `json:"key"`
 }

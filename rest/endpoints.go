@@ -14,7 +14,10 @@ var (
 	EndpointServiceStatistics = func() string { return "/service/statistics" }
 
 	// User
-	EndpointUser = func() string { return "/users/me" }
+	EndpointUser          = func() string { return "/users/me" }
+	EndpointUserSnapshots = func(snapshotType string) string {
+		return fmt.Sprintf("/users/snapshots?scope=%s", snapshotType)
+	}
 
 	// Application
 	EndpointApplication            = func() string { return "/apps" }
