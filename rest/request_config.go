@@ -14,7 +14,7 @@ type RequestConfig struct {
 func DefaultRequestConfig(req *http.Request) *RequestConfig {
 	return &RequestConfig{
 		Request: req,
-		Ctx:     context.TODO(),
+		Ctx:     context.Background(),
 	}
 }
 
@@ -25,7 +25,16 @@ func (c *RequestConfig) Apply(opts []RequestOpt) {
 		opt(c)
 	}
 	if c.Ctx == nil {
-		c.Ctx = context.TODO()
+		c.Ctx = context.Background()
+	}
+	c.Request = c.Request.WithContext(c.Ctx)
+}
+
+// WithContext attaches ctx to the outgoing request, enabling cancellation
+// and deadlines.
+func WithContext(ctx context.Context) RequestOpt {
+	return func(config *RequestConfig) {
+		config.Ctx = ctx
 	}
 }
 
