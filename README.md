@@ -175,3 +175,4 @@ Bug reports and PRs welcome at [`squarecloudofc/sdk-api-go`](https://github.com/
 ## Authors
 
 - [@joaootavios](https://github.com/joaootavios)
+- [@richaardev](https://github.com/richaardev)
