@@ -1,3 +1,3 @@
-module github.com/squarecloudofc/sdk-api-go/v2
+module github.com/squarecloudofc/sdk-api-go/v3
 
-go 1.24.2
+go 1.22
