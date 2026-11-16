@@ -1,18 +1,23 @@
-// Package squarecloud is the official Go SDK for the Square Cloud API v2
-// (contract pinned in spec/openapi.json). It has no dependencies besides the
-// standard library.
+// Package squarecloud is the official Go SDK for the Square Cloud API.
 //
+// Create a [Client] with your API key and call the API through its groups,
+// such as Account, Apps, Databases and Workspaces:
+//
+//	ctx := context.Background()
 //	c := squarecloud.New(os.Getenv("SQUARECLOUD_API_KEY"))
+//
 //	me, err := c.Account.Me(ctx)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	fmt.Println(me.User.Name, len(me.Applications))
 //
-// Every method takes a context.Context first. A *Client is safe for concurrent
-// use; build it once and reuse it.
+// Every method takes a [context.Context] first. Cancel it, or give it a
+// deadline, to stop a call. A Client is safe for concurrent use, so create one
+// and share it.
 //
-// Workspace-shared applications: wherever an appID is accepted you can pass the
-// composite "<appId>-<workspaceId>" to act on an app shared with you through a
-// workspace. The API splits it server side.
-//
-// Errors from the API are *APIError values; inspect them with errors.As.
+// A failed call returns an [*APIError]. Use [errors.As] to read its HTTP
+// status and error code.
 package squarecloud
 
 import (
@@ -36,14 +41,17 @@ import (
 )
 
 const (
-	// Version is the SDK version, sent in the User-Agent header.
-	Version = "3.0.0"
-	// DefaultBaseURL is the API root. Paths such as "/apps" are appended to it.
+	// Version is the version of this SDK. It is part of the default
+	// User-Agent header.
+	Version = "4.0.0"
+	// DefaultBaseURL is the address of the Square Cloud API. Use
+	// [WithBaseURL] to send requests somewhere else, such as a proxy or a
+	// test server.
 	DefaultBaseURL = "https://api.squarecloud.app/v2"
 
 	maxErrorBody    = 64 << 10
 	maxUploadSize   = 100 << 20 // zip cap enforced by the API
-	maxFileSize     = 10 << 20  // decoded content cap of PUT /apps/{id}/files
+	maxFileSize     = 10 << 20  // The decoded content limit of Files.Write.
 	largeFile       = 1 << 20   // Files.Write content above this gets no default deadline
 	maxBackoff      = 8 * time.Second
 	defaultTimeout  = 30 * time.Second
@@ -57,21 +65,30 @@ const (
 	// request one 90s deadline and answers 503 server_overloaded past it.
 	aiFloor = 2 * time.Minute
 
-	msgZipTooLarge  = "Uploads are limited to 100 MB"
-	msgFileTooLarge = "File content is limited to 10 MB"
+	msgZipTooLarge  = "The file is larger than the 100 MB upload limit. Leave dependency folders and build output out of the zip, or upload a smaller file."
+	msgFileTooLarge = "The content is larger than the 10 MB file write limit, so it was not sent. Upload larger files with Apps.Commit."
 )
 
 // retryBase is the first backoff step (500ms·2^n, jittered, capped at 8s). A
 // variable only so tests can shrink it.
 var retryBase = 500 * time.Millisecond
 
-// Client talks to the Square Cloud API. Build it with New.
+// Client sends requests to the Square Cloud API. Create it with [New]. Its
+// fields group the calls by what they act on. A Client is safe for concurrent
+// use.
 type Client struct {
-	Account    AccountAPI
-	Service    ServiceAPI
-	AI         AIAPI
-	Apps       AppsAPI
-	Databases  DatabasesAPI
+	// Account reads the account that owns the API key.
+	Account AccountAPI
+	// Service reports the status of the platform. It works without an API
+	// key.
+	Service ServiceAPI
+	// AI sends chat requests to the Square Cloud AI.
+	AI AIAPI
+	// Apps deploys and controls applications.
+	Apps AppsAPI
+	// Databases creates and controls databases.
+	Databases DatabasesAPI
+	// Workspaces shares applications with other accounts.
 	Workspaces WorkspacesAPI
 
 	hc         *http.Client
@@ -82,14 +99,15 @@ type Client struct {
 	maxRetries int
 }
 
-// Option configures a Client.
+// Option changes a setting of a [Client]. Pass options to [New].
 type Option func(*Client)
 
-// WithHTTPClient sets the underlying *http.Client. Do not set
-// http.Client.Timeout on it: that timeout also covers reading the body and
-// would cut realtime streams and large downloads. Use contexts and Transport
-// timeouts instead.
-// A nil hc keeps the default.
+// WithHTTPClient makes the client send its requests through hc. A nil hc
+// keeps the default, an empty [http.Client].
+//
+// Do not set hc.Timeout. That limit also covers reading the response, so it
+// would cut realtime streams and large downloads. Use [WithTimeout], contexts
+// and the timeouts of hc.Transport instead.
 func WithHTTPClient(hc *http.Client) Option {
 	return func(c *Client) {
 		if hc != nil {
@@ -98,30 +116,39 @@ func WithHTTPClient(hc *http.Client) Option {
 	}
 }
 
-// WithBaseURL overrides DefaultBaseURL (for tests or proxies).
+// WithBaseURL sends requests to u instead of [DefaultBaseURL], for example to
+// a proxy or a test server. A trailing slash is removed.
 func WithBaseURL(u string) Option {
 	return func(c *Client) { c.base = strings.TrimRight(u, "/") }
 }
 
-// WithUserAgent overrides the default "squarecloud-sdk-go/<version>" User-Agent.
+// WithUserAgent replaces the whole User-Agent header, which is
+// "squarecloud-sdk-go/<Version>" by default.
 func WithUserAgent(ua string) Option { return func(c *Client) { c.ua = ua } }
 
-// WithMaxRetries sets how many times a retryable failure is retried (default 2,
-// 0 disables retries). See APIError for what is retryable.
+// WithMaxRetries sets how many times a failed call is repeated when that is
+// safe. The default is 2, and 0 or a negative n turns retries off. See
+// [APIError] for the failures that are retried.
 func WithMaxRetries(n int) Option { return func(c *Client) { c.maxRetries = max(n, 0) } }
 
-// WithTimeout sets the default deadline of a call whose ctx has none (default
-// 30s). Held operations (Start, Stop, Restart, Databases.Create, snapshot
-// Create and Restore) and AI.Chat get at least 2 minutes. Uploads,
-// Files.Write above 1 MiB and downloads get none, and a realtime stream gets
-// it only until the response headers arrive. d <= 0 disables every default
-// deadline, the floors included; a ctx deadline always wins.
+// WithTimeout sets how long a call may take when its context has no deadline.
+// The default is 30 seconds. A deadline on the context always wins.
+//
+// Calls that the API can hold open get at least 2 minutes. They are Start,
+// Stop and Restart of applications and databases, [DatabasesAPI.Create],
+// snapshot Create and Restore, and [AIAPI.Chat]. Uploads,
+// [AppFilesAPI.Write] with more than 1 MiB of content, and
+// [Client.DownloadSnapshot] have no time limit, so only the context stops
+// them. [AppsAPI.Realtime] applies the timeout only until the stream opens.
+//
+// A d of 0 or less turns every time limit off, the 2-minute minimum included.
 func WithTimeout(d time.Duration) Option { return func(c *Client) { c.timeout = d } }
 
-// New returns a Client authenticated with apiKey. The key is sent as-is in the
-// Authorization header. With an empty or whitespace-only key every call
-// except Service.Status fails locally with CodeInvalidAPIKey (New itself
-// returns no error).
+// New returns a client that authenticates every call with apiKey.
+//
+// New never fails. With an empty or whitespace-only key, every call except
+// [ServiceAPI.Status] returns an [*APIError] with code [CodeInvalidAPIKey]
+// and sends nothing.
 func New(apiKey string, opts ...Option) *Client {
 	if strings.TrimSpace(apiKey) == "" {
 		apiKey = ""
@@ -153,48 +180,77 @@ func New(apiKey string, opts ...Option) *Client {
 	return c
 }
 
-// APIError is every SDK failure except caller-side ones (a nil upload reader,
-// an unparsable snapshot or base URL, an input encoding/json rejects, a
-// failing io.Writer in DownloadSnapshot):
-//   - a non-2xx response, or a 2xx whose envelope says {"status":"error"};
-//   - a 2xx body that is not valid JSON (CodeUnknown, cause in Unwrap);
-//   - a network failure before or while reading the response, e.g. a
-//     deadline hit mid-body (Status 0, CodeNetworkError or CodeTimeout,
-//     Message is the cause's text, cause in Unwrap);
-//   - a local check, sent nowhere (Status 0, CodeInvalidID, CodeFileTooLarge
-//     or CodeInvalidAPIKey).
+// APIError is the error a call returns when the API refuses the request, the
+// network fails, or a local check stops the call before anything is sent.
+// Use [errors.As] to read it:
 //
-// A canceled ctx is detectable with errors.Is(err, context.Canceled)
-// wherever it ends the call; a deadline hit during a retry wait is
-// CodeTimeout.
+//	var apiErr *squarecloud.APIError
+//	if errors.As(err, &apiErr) && apiErr.Code == squarecloud.CodeMissingScope {
+//		fmt.Println(apiErr.Message)
+//	}
 //
-// A response without a code gets CodeUnknown and, if it has no message
-// either, Message "HTTP <status>". Both error dialects are decoded: the Square
-// envelope {status, code, message} and the OpenAI-style {error: {message,
-// type, param, code}} that every AI.Chat error uses, auth, 429 and 503
-// included (an object in "error" wins; Code is its lowercase code, or type
-// when code is absent). An expired API key is 401 ACCESS_DENIED, like an
-// unknown one.
+// Status is 0 when no complete response arrived. Code is then
+// [CodeNetworkError] or [CodeTimeout], and [APIError.Unwrap] returns the
+// cause. Local checks also leave Status at 0. They return [CodeInvalidID] for
+// an id that is empty, "." or "..", [CodeFileTooLarge] for content over the
+// size limits, and [CodeInvalidAPIKey] for an empty API key.
 //
-// Retries (WithMaxRetries): network errors on GET (a body that breaks off
-// mid-read included), 503 UPLOAD_BUSY and ANALYTICS_BUSY, and 503
-// DATABASE_UNAVAILABLE on GET only: it can fire after a mutation's handler
-// has started, so the SDK does not repeat mutations; the caller may retry an
-// idempotent one (e.g. Envs.Replace, Files.Write, a Delete). An HTTP 429 (RATE_LIMITED,
-// which can be a 30-minute block, KEEP_CALM, the deprecated RATE_LIMIT and
-// RATE_LIMIT_EXCEEDED, or the AI's rate_limit_exceeded) is never retried;
-// check Status == 429.
+// A response without an error code gets [CodeUnknown], with the server's
+// message or "HTTP <status>" as Message. So does a successful response whose
+// body is not valid JSON. A successful response whose body reports an error
+// is returned as an error too, except a 202, which only means that the work
+// is still running (see [SnapshotCreated] and [SnapshotRestored]). Errors
+// from [AIAPI.Chat] follow the OpenAI format, so their Code is a lowercase
+// OpenAI code such as "rate_limit_exceeded", or the error type when the code
+// is missing. An API key that is unknown, revoked or expired gets 401
+// ACCESS_DENIED.
+//
+// When you cancel the context, errors.Is(err, context.Canceled) reports
+// true. When the context deadline or the client timeout passes first, Code is
+// [CodeTimeout].
+//
+// The SDK repeats a call only when that is safe, up to the count set with
+// [WithMaxRetries], and waits longer before each new attempt, up to 8
+// seconds. It repeats network errors on GET requests. It repeats 503
+// UPLOAD_BUSY and ANALYTICS_BUSY on any request, because the API refused
+// those before doing any work. It repeats 503 DATABASE_UNAVAILABLE only on
+// GET requests, because on other methods the change may already have
+// started. You can repeat an idempotent call yourself, such as
+// [AppEnvsAPI.Replace], [AppFilesAPI.Write] or a Delete. An upload is
+// repeated only when its reader can be read again, such as an [*os.File].
+//
+// A 429 is never repeated. RATE_LIMITED can block the account, API key or IP
+// address for about 30 minutes, and KEEP_CALM is the limit of a single
+// operation.
+// When Status is 429, wait before you try again.
+//
+// Some mistakes in the arguments return a plain error instead of an
+// APIError. They are a nil upload reader, a snapshot URL or base URL that
+// cannot be parsed, a value that encoding/json cannot encode, and an error
+// from the [io.Writer] passed to [Client.DownloadSnapshot].
 type APIError struct {
-	Status  int
-	Code    string
+	// Status is the HTTP status of the response. It is 0 when no complete
+	// response arrived or a local check stopped the call.
+	Status int
+	// Code is the error code, such as "APP_NOT_FOUND". Compare it with the
+	// Code constants, such as [CodeAppNotFound].
+	Code string
+	// Message is the server's explanation of the error. It is "" when the
+	// server sent only a code. When no response arrived, it is the text of
+	// the cause.
 	Message string
-	Method  string
-	Path    string
-	err     error
+	// Method is the HTTP method of the request, such as "GET".
+	Method string
+	// Path is the URL path of the request, including the path of the base
+	// URL. It never includes the query string, so a signed snapshot link
+	// never appears in an error.
+	Path string
+	err  error
 }
 
-// Error renders "squarecloud: <METHOD> <path>: HTTP <status> <CODE>: <message>".
-// The HTTP part is left out when Status is 0, and the message when empty.
+// Error formats the error as "squarecloud: <METHOD> <path>: HTTP <status>
+// <CODE>: <message>". It leaves out the HTTP status when Status is 0, and the
+// message when Message is empty.
 func (e *APIError) Error() string {
 	s := "squarecloud: " + e.Method + " " + e.Path + ":"
 	if e.Status != 0 {
@@ -207,7 +263,8 @@ func (e *APIError) Error() string {
 	return s
 }
 
-// Unwrap returns the cause (a transport, decode or ctx error), or nil.
+// Unwrap returns the cause of the error, such as a network, decoding or
+// context error. It returns nil when there is none.
 func (e *APIError) Unwrap() error { return e.err }
 
 // netError is a failure with no complete response; the cause is the message.
@@ -359,11 +416,11 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body io.Re
 	p, _, _ := strings.Cut(path, "?")
 	for _, seg := range strings.Split(p[1:], "/") {
 		if seg == "" || seg == "." || seg == ".." {
-			return nil, c.localError(method, p, CodeInvalidID, `Empty, "." and ".." are not valid ids`)
+			return nil, c.localError(method, p, CodeInvalidID, `The id is empty, "." or "..", so the request was not sent. Pass the id of the resource you want to reach.`)
 		}
 	}
 	if c.key == "" && p != "/service/status" {
-		return nil, c.localError(method, p, CodeInvalidAPIKey, "The API key is empty")
+		return nil, c.localError(method, p, CodeInvalidAPIKey, "The API key is missing or empty, so the request was not sent. Create a key at https://squarecloud.app/account/security and pass it to New.")
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, body)
 	if err != nil {
@@ -421,9 +478,23 @@ func (c *Client) send(req *http.Request) (*http.Response, error) {
 // decode parses a 2xx body into out. An envelope that says "error" is an
 // *APIError whatever the HTTP status; raw bodies (status, AI) have no envelope.
 func decode(res *http.Response, data []byte, out any) error {
+	e := &APIError{Status: res.StatusCode, Method: res.Request.Method, Path: res.Request.URL.EscapedPath()}
+	invalid := func(err error) error {
+		e.Code, e.Message, e.err = CodeUnknown, "Invalid JSON in HTTP "+strconv.Itoa(res.StatusCode)+" response", err
+		return e
+	}
 	if res.StatusCode == http.StatusAccepted {
-		// The only documented 202 is SNAPSHOT_PROCESSING: pending, not failed.
-		if s, ok := out.(*SnapshotCreated); ok {
+		// Both documented 202s mean "still running", whatever the envelope
+		// says: SNAPSHOT_PROCESSING (snapshot Create) and
+		// SNAPSHOT_RESTORE_PROCESSING (Restore). Pending, not failed; but a
+		// body that is not JSON (a proxy page) is not the API's answer.
+		if err := json.NewDecoder(bytes.NewReader(data)).Decode(new(json.RawMessage)); err != nil && err != io.EOF {
+			return invalid(err)
+		}
+		switch s := out.(type) {
+		case *SnapshotCreated:
+			s.Pending = true
+		case *SnapshotRestored:
 			s.Pending = true
 		}
 		return nil
@@ -444,7 +515,6 @@ func decode(res *http.Response, data []byte, out any) error {
 		env.Response = out
 	}
 	err := json.NewDecoder(bytes.NewReader(data)).Decode(target) // tolerates an empty body and trailing data
-	e := &APIError{Status: res.StatusCode, Method: res.Request.Method, Path: res.Request.URL.EscapedPath()}
 	if env.Status == "error" {
 		e.Code, e.Message = cmp.Or(env.Code, CodeUnknown), env.Message
 		if env.Code == "" && env.Message == "" {
@@ -453,8 +523,7 @@ func decode(res *http.Response, data []byte, out any) error {
 		return e
 	}
 	if err != nil && err != io.EOF {
-		e.Code, e.Message, e.err = CodeUnknown, "Invalid JSON in HTTP "+strconv.Itoa(res.StatusCode)+" response", err
-		return e
+		return invalid(err)
 	}
 	return nil
 }
@@ -542,7 +611,7 @@ var (
 func newUpload(r io.Reader, filename, fallback string) (*upload, error) {
 	// A nil *os.File (an unchecked os.Open) is nil too: its Name would panic.
 	if f, ok := r.(*os.File); r == nil || ok && f == nil {
-		return nil, errors.New("squarecloud: nil upload reader")
+		return nil, errors.New("squarecloud: the upload reader is nil and must be an open file or another io.Reader")
 	}
 	if f, ok := r.(interface{ Name() string }); ok && filename == "" && filepath.Base(f.Name()) != "." {
 		filename = filepath.Base(f.Name())
@@ -602,15 +671,20 @@ func (c *capped) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// DownloadSnapshot streams a snapshot archive (SnapshotCreated.URL, a
-// presigned URL) into w. The API key is not sent, and the URL never appears
-// in the returned error. The download has no deadline besides ctx; a network
-// error before the response is retried like any GET.
+// DownloadSnapshot writes the snapshot archive at link to w as it arrives,
+// without holding it in memory. Pass the URL field of a [Snapshot] or a
+// [SnapshotCreated]. Those links stop working 1 hour after they are issued.
+//
+// Your API key is not sent with the download, and the link never appears in a
+// returned error, because the link itself grants access to the archive. Only
+// ctx limits how long the download takes. A network error before the download
+// starts is retried like any GET. A failed download returns an [*APIError],
+// and an error from w is returned unchanged.
 func (c *Client) DownloadSnapshot(ctx context.Context, link string, w io.Writer) error {
 	res, err := c.sendRetry(ctx, http.MethodGet, true, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
 		if err != nil {
-			return nil, errors.New("squarecloud: invalid snapshot URL")
+			return nil, errors.New("squarecloud: the snapshot link is not a valid URL and should be the URL field of a Snapshot or SnapshotCreated")
 		}
 		req.Header.Set("User-Agent", c.ua)
 		return req, nil

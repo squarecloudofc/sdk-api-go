@@ -191,15 +191,15 @@ func TestLocalErrorsAreTyped(t *testing.T) {
 	if e.Status != 0 || e.Code != CodeInvalidID || e.Method != "DELETE" || e.Path != "/v2/apps/.." {
 		t.Fatalf("%+v", e)
 	}
-	if got := e.Error(); got != `squarecloud: DELETE /v2/apps/..: INVALID_ID: Empty, "." and ".." are not valid ids` {
+	if got := e.Error(); got != `squarecloud: DELETE /v2/apps/..: INVALID_ID: The id is empty, "." or "..", so the request was not sent. Pass the id of the resource you want to reach.` {
 		t.Fatal(got)
 	}
 	e = asAPIError(t, c.Apps.Files.Write(ctx, "app1", "/big", make([]byte, maxFileSize+1)))
-	if e.Code != CodeFileTooLarge || e.Path != "/v2/apps/app1/files" || e.Message != "File content is limited to 10 MB" {
+	if e.Code != CodeFileTooLarge || e.Path != "/v2/apps/app1/files" || e.Message != "The content is larger than the 10 MB file write limit, so it was not sent. Upload larger files with Apps.Commit." {
 		t.Fatalf("%+v", e)
 	}
 	_, err := c.Apps.Create(ctx, &hugeZip{})
-	if e := asAPIError(t, err); e.Code != CodeFileTooLarge || e.Path != "/v2/apps" || e.Message != "Uploads are limited to 100 MB" {
+	if e := asAPIError(t, err); e.Code != CodeFileTooLarge || e.Path != "/v2/apps" || e.Message != "The file is larger than the 100 MB upload limit. Leave dependency folders and build output out of the zip, or upload a smaller file." {
 		t.Fatalf("%+v", e)
 	}
 	// A nil upload reader is the caller's bug: a plain error, nothing sent.
@@ -230,6 +230,56 @@ func TestSnapshotPending(t *testing.T) {
 	got, err := c.Apps.Snapshots.Create(context.Background(), "id1")
 	if err != nil || got.Pending || got.URL != "https://x/s.zip" {
 		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+// A restore that outlives the API's ~90s deadline answers 202 with an error
+// envelope: it keeps running, so it is pending, not failed.
+func TestRestorePending(t *testing.T) {
+	for _, tc := range []struct {
+		status  int
+		body    string
+		pending bool
+	}{
+		{202, `{"status":"error","code":"SNAPSHOT_RESTORE_PROCESSING"}`, true},
+		{200, `{"status":"success"}`, false},
+	} {
+		c := testClient(t, reply(tc.status, tc.body))
+		for _, s := range []SnapshotsAPI{c.Apps.Snapshots, c.Databases.Snapshots} {
+			got, err := s.Restore(context.Background(), "id1", "n", "v")
+			if err != nil || got.Pending != tc.pending {
+				t.Fatalf("%d: %+v %v", tc.status, got, err)
+			}
+		}
+	}
+	c := testClient(t, reply(409, `{"status":"error","code":"RESTORE_IN_PROGRESS"}`))
+	if _, err := c.Apps.Snapshots.Restore(context.Background(), "id1", "n", "v"); asAPIError(t, err).Code != CodeRestoreInProgress {
+		t.Fatal(err)
+	}
+}
+
+// A 202 is pending whatever its JSON says (an empty body included), but a
+// body that is not JSON (a proxy page) is no answer from the API.
+func TestPending202Body(t *testing.T) {
+	for _, body := range []string{``, `{}`, `{"status":"success"}`} {
+		c := testClient(t, reply(202, body))
+		created, err := c.Apps.Snapshots.Create(context.Background(), "id1")
+		if err != nil || !created.Pending {
+			t.Fatalf("%q: %+v %v", body, created, err)
+		}
+		restored, err := c.Databases.Snapshots.Restore(context.Background(), "id1", "n", "v")
+		if err != nil || !restored.Pending {
+			t.Fatalf("%q: %+v %v", body, restored, err)
+		}
+	}
+	c := testClient(t, reply(202, `<html>gateway</html>`))
+	var se *json.SyntaxError
+	_, err := c.Apps.Snapshots.Create(context.Background(), "id1")
+	if e := asAPIError(t, err); e.Status != 202 || e.Code != CodeUnknown || e.Message != "Invalid JSON in HTTP 202 response" || !errors.As(err, &se) {
+		t.Fatalf("%+v", e)
+	}
+	if _, err := c.Apps.Snapshots.Restore(context.Background(), "id1", "n", "v"); asAPIError(t, err).Code != CodeUnknown {
+		t.Fatal(err)
 	}
 }
 
@@ -272,6 +322,12 @@ func TestHeadersAndEscaping(t *testing.T) {
 		t.Fatal(uri, err)
 	}
 	if _, err := c.Apps.Files.Read(ctx, "app1", ""); err != nil || uri != "/v2/apps/app1/files/content?encoding=base64" {
+		t.Fatal(uri, err)
+	}
+	if _, err := c.Apps.Metrics(ctx, "app1", ""); err != nil || uri != "/v2/apps/app1/metrics" {
+		t.Fatal(uri, err)
+	}
+	if _, err := c.Databases.Metrics(ctx, "db1", "24h"); err != nil || uri != "/v2/databases/db1/metrics?range=24h" {
 		t.Fatal(uri, err)
 	}
 	brt := time.FixedZone("BRT", -3*3600)
@@ -371,7 +427,7 @@ func TestRetryPolicy(t *testing.T) {
 		}
 	})
 	t.Run("429 is never retried", func(t *testing.T) {
-		for _, code := range []string{CodeRateLimited, CodeRateLimit, CodeRateLimitExceeded, CodeKeepCalm} {
+		for _, code := range []string{CodeRateLimited, CodeRateLimit, CodeRateLimitExceeded, CodeKeepCalm, "rate_limit_exceeded", "weekly_limit_reached"} {
 			c, n := retryServer(t, func(_ int32, w http.ResponseWriter) bool {
 				w.WriteHeader(429)
 				_, _ = io.WriteString(w, `{"status":"error","code":"`+code+`"}`)
@@ -383,9 +439,23 @@ func TestRetryPolicy(t *testing.T) {
 		}
 	})
 	t.Run("other 503s are not retried", func(t *testing.T) {
-		c, n := retryServer(t, busy("MAINTENANCE"))
-		if _, err := c.Apps.Get(ctx, "app1"); asAPIError(t, err).Status != 503 || n.Load() != 1 {
-			t.Fatal(n.Load(), err)
+		for _, code := range []string{"MAINTENANCE", CodeSnapshotsUnavailable, CodeClusterMaintenanceTryLater} {
+			c, n := retryServer(t, busy(code))
+			if _, err := c.Apps.Snapshots.List(ctx, "app1"); asAPIError(t, err).Status != 503 || n.Load() != 1 {
+				t.Fatal(code, n.Load(), err)
+			}
+		}
+	})
+	t.Run("409 busy resources are not retried", func(t *testing.T) {
+		for _, code := range []string{CodeRestoreInProgress, CodeSnapshotInProgress, CodeEnvBusy} {
+			c, n := retryServer(t, func(_ int32, w http.ResponseWriter) bool {
+				w.WriteHeader(409)
+				_, _ = io.WriteString(w, `{"status":"error","code":"`+code+`"}`)
+				return true
+			})
+			if _, err := c.Apps.Envs.Get(ctx, "app1"); asAPIError(t, err).Code != code || n.Load() != 1 {
+				t.Fatal(code, n.Load(), err)
+			}
 		}
 	})
 	t.Run("a timeout is never retried", func(t *testing.T) {
@@ -569,7 +639,7 @@ func TestTimeouts(t *testing.T) {
 			"Apps.Restart":      func() error { return c.Apps.Restart(ctx, "app1") },
 			"Databases.Start":   func() error { return c.Databases.Start(ctx, "db1") },
 			"Databases.Stop":    func() error { return c.Databases.Stop(ctx, "db1") },
-			"Snapshots.Restore": func() error { return c.Databases.Snapshots.Restore(ctx, "db1", "n", "v") },
+			"Snapshots.Restore": func() error { _, err := c.Databases.Snapshots.Restore(ctx, "db1", "n", "v"); return err },
 			"AI.Chat":           func() error { _, err := c.AI.Chat(ctx, ChatRequest{}); return err },
 		} {
 			if err := f(); err != nil {
@@ -780,6 +850,20 @@ func TestResponseFields(t *testing.T) {
 	db, err := c.Databases.Create(ctx, DatabaseCreate{Name: "d", Memory: 512, Type: DatabaseRedis, Version: "7"})
 	if err != nil || db.Certificate != nil {
 		t.Fatal(db, err)
+	}
+	// range=7d points carry the hour's peaks, which the spec describes only in
+	// prose; disk and storage are null on a point without a reading.
+	c = testClient(t, reply(200, `{"status":"success","response":[{"date":"2026-01-01T00:00:00Z","cpu":1.5,"ram":100,"net":[1,2],"disk":[3,4],"storage":5,"cpu_max":9.5,"ram_max":200},`+
+		`{"date":"2026-01-01T01:00:00Z","cpu":1,"ram":2,"net":[1,2],"disk":null,"storage":null}]}`))
+	pts, err := c.Apps.Metrics(ctx, "app1", "7d")
+	if err != nil || len(pts) != 2 || pts[0].CPUMax == nil || *pts[0].CPUMax != 9.5 || *pts[0].RAMMax != 200 || pts[0].Storage == nil || *pts[0].Storage != 5 ||
+		len(pts[0].Disk) != 2 || pts[0].Disk[1] != 4 || pts[1].Disk != nil || pts[1].Storage != nil || pts[1].CPUMax != nil {
+		t.Fatalf("%+v %v", pts, err)
+	}
+	c = testClient(t, reply(200, `{"status":"success","response":{"state":"none"}}`))
+	st, err := c.Databases.Snapshots.RestoreState(ctx, "db1")
+	if err != nil || st != (SnapshotRestoreState{State: "none"}) {
+		t.Fatalf("%+v %v", st, err)
 	}
 }
 

@@ -1,7 +1,7 @@
 package squarecloud_test
 
-// These examples are compiled and vetted by `go test` but never executed (no
-// "Output:" comment), so they never call the real API.
+// go test compiles and vets these examples but never runs them, because they
+// have no "Output:" comment. They never call the real API.
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/squarecloudofc/sdk-api-go/v3"
+	"github.com/squarecloudofc/sdk-api-go/v4"
 )
 
 func Example() {
@@ -24,7 +24,9 @@ func Example() {
 	}
 	fmt.Println(me.User.Name, me.User.Plan.Name, len(me.Applications))
 
-	appID := "a1b2c3d4e5f60718293a4b5c6d7e8f90" // or "<appId>-<workspaceId>" for a shared app
+	// For an application shared with you through a workspace, use its
+	// composite id instead (see AppsAPI).
+	appID := "a1b2c3d4e5f60718293a4b5c6d7e8f90"
 	if err := c.Apps.Restart(ctx, appID); err != nil {
 		var apiErr *squarecloud.APIError
 		if errors.As(err, &apiErr) {
@@ -38,7 +40,8 @@ func ExampleAppsAPI_Create() {
 	ctx := context.Background()
 	c := squarecloud.New(os.Getenv("SQUARECLOUD_API_KEY"))
 
-	f, err := os.Open("app.zip") // streamed, never loaded in memory
+	// The zip is streamed as it is uploaded, never loaded into memory.
+	f, err := os.Open("app.zip")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -49,7 +52,8 @@ func ExampleAppsAPI_Create() {
 	}
 	fmt.Println(app.ID, app.Language.Name)
 
-	// Commit one file: a non-zip lands at <path>/<filename>.
+	// Commit a single file. A file that is not a zip lands at
+	// <path>/<filename>, so this one becomes src/index.js.
 	src, err := os.Open("index.js")
 	if err != nil {
 		log.Fatal(err)
@@ -59,7 +63,8 @@ func ExampleAppsAPI_Create() {
 		log.Fatal(err)
 	}
 
-	// Deploy on push through the Square Cloud GitHub App (scope apps:deploy).
+	// Deploy on every push to main through the Square Cloud GitHub App. The
+	// API key needs the apps:deploy scope.
 	repo, err := c.Apps.Deploys.LinkGithubApp(ctx, app.ID, "octocat/hello-world", "main")
 	if err != nil {
 		log.Fatal(err)
@@ -83,14 +88,14 @@ func ExampleAppsAPI_Realtime() {
 	for {
 		ev, err := s.Next()
 		if err != nil {
-			return // io.EOF when the server ends the stream
+			return // The error is io.EOF when the stream ends normally.
 		}
 		switch ev.Event {
 		case "logs":
 			fmt.Printf("[%s] %s\n", ev.Stream, ev.Line)
-		case "status": // Status is never nil on a status event
+		case "status": // Status is never nil on a status event.
 			fmt.Printf("cpu %.1f%% ram %.0f/%.0f MB\n", ev.Status.CPU, ev.Status.RAM[0], ev.Status.RAM[1])
-		default: // system, error
+		default: // A "system" or "error" event.
 			fmt.Println(ev.Event, ev.Data)
 		}
 	}
@@ -106,7 +111,7 @@ func ExampleSnapshotsAPI_Create() {
 		log.Fatal(err)
 	}
 	if snap.Pending {
-		fmt.Println("still processing, list the snapshots later")
+		fmt.Println("The snapshot is still being taken. List the snapshots in a few minutes.")
 		return
 	}
 	out, err := os.Create("snapshot.zip")
@@ -117,15 +122,41 @@ func ExampleSnapshotsAPI_Create() {
 	if err := c.DownloadSnapshot(ctx, snap.URL, out); err != nil {
 		log.Fatal(err)
 	}
+}
 
-	// Restore the latest one: Name and VersionID of a listed snapshot (its URL
-	// downloads it too).
+func ExampleSnapshotsAPI_Restore() {
+	ctx := context.Background()
+	c := squarecloud.New(os.Getenv("SQUARECLOUD_API_KEY"))
+	appID := "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+
+	// Restore the first listed snapshot. Restore takes its Name and
+	// VersionID.
 	snaps, err := c.Apps.Snapshots.List(ctx, appID)
 	if err != nil || len(snaps) == 0 {
 		log.Fatal("no snapshots", err)
 	}
-	if err := c.Apps.Snapshots.Restore(ctx, appID, snaps[0].Name, snaps[0].VersionID); err != nil {
+	res, err := c.Apps.Snapshots.Restore(ctx, appID, snaps[0].Name, snaps[0].VersionID)
+	if err != nil {
 		log.Fatal(err)
+	}
+	// A large restore keeps running after Restore returns. Follow it with
+	// RestoreState until it is no longer queued or running, and never call
+	// Restore again.
+	st := squarecloud.SnapshotRestoreState{State: "success"}
+	for res.Pending {
+		time.Sleep(10 * time.Second)
+		if st, err = c.Apps.Snapshots.RestoreState(ctx, appID); err != nil {
+			log.Fatal(err)
+		}
+		res.Pending = st.State == "queued" || st.State == "running"
+	}
+	switch st.State {
+	case "success":
+		fmt.Println("restored")
+	case "error":
+		log.Fatal("restore failed: ", st.Code)
+	default: // "none" means that the result is no longer available.
+		fmt.Println("restore result unknown")
 	}
 }
 
@@ -139,7 +170,8 @@ func ExampleDatabasesAPI_Create() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// Password, Certificate and ConnectionURL are shown only once.
+	// Save Password, Certificate and ConnectionURL now. The API never shows
+	// them again.
 	fmt.Println(db.ID, db.ConnectionURL != "")
 }
 

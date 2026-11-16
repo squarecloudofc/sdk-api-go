@@ -79,8 +79,8 @@ type liveRun struct {
 // calm runs f, waiting 10s and retrying (test only: the SDK never retries
 // these) on 429 KEEP_CALM at most 7 times (the github-app and webhook
 // windows are 60s per user, and another SDK's suite may have just used them),
-// and on 403 RESTORE_IN_PROGRESS for up to 130s (the API blocks deletes for
-// 120s after a restore).
+// and on 409 RESTORE_IN_PROGRESS for up to 130s (the API blocks deletes,
+// start and stop while a restore holds the resource).
 func calm(ctx context.Context, f func() error) error {
 	restoring := time.Now().Add(130 * time.Second)
 	for calms := 0; ; {
@@ -91,7 +91,7 @@ func calm(ctx context.Context, f func() error) error {
 			return err
 		case e.Status == 429 && e.Code == CodeKeepCalm && calms < 7:
 			calms++
-		case e.Status == 403 && e.Code == "RESTORE_IN_PROGRESS" && time.Now().Before(restoring):
+		case e.Status == 409 && e.Code == CodeRestoreInProgress && time.Now().Before(restoring):
 		default:
 			return err
 		}
@@ -445,7 +445,10 @@ func liveApp(l *liveRun, name string, web bool) string {
 	val(l, "Apps.Status", func() (RuntimeStats, error) { return c.Apps.Status(ctx, id) })
 	val(l, "Apps.StatusRaw", func() (RuntimeStatsRaw, error) { return c.Apps.StatusRaw(ctx, id) })
 	val(l, "Apps.Logs", func() (string, error) { return c.Apps.Logs(ctx, id) })
-	val(l, "Apps.Metrics", func() ([]MetricPoint, error) { return c.Apps.Metrics(ctx, id) })
+	val(l, "Apps.Metrics", func() ([]MetricPoint, error) { return c.Apps.Metrics(ctx, id, "") })
+	// 7d needs a Pro or Enterprise plan and 512 MB; anything else silently
+	// gets the 24h answer, so only the shape is checked.
+	val(l, "Apps.Metrics", func() ([]MetricPoint, error) { return c.Apps.Metrics(ctx, id, "7d") })
 	l.must("Apps.Stop", func() error { return c.Apps.Stop(ctx, id) })
 	l.must("Apps.Start", func() error { return c.Apps.Start(ctx, id) })
 	liveRealtime(l, id)
@@ -622,10 +625,38 @@ func liveSnapshots(l *liveRun, id string) {
 		}
 	}
 	snaps := listSnapshots(l, "Apps.Snapshots.List", created && snap.Pending, func() ([]Snapshot, error) { return c.Apps.Snapshots.List(ctx, id) })
+	liveRestore(l, "Apps.Snapshots", snaps, c.Apps.Snapshots, id)
+}
+
+// liveRestore restores the latest snapshot (or asserts a 4xx for a missing
+// one), then reads the restore state: a pending restore (202) is polled every
+// 10s for up to 10 minutes until success or error; otherwise one call must
+// return a known state.
+func liveRestore(l *liveRun, group string, snaps []Snapshot, s SnapshotsAPI, id string) {
+	ctx := l.ctx
+	var res SnapshotRestored
 	if len(snaps) > 0 {
-		l.must("Apps.Snapshots.Restore", func() error { return c.Apps.Snapshots.Restore(ctx, id, snaps[0].Name, snaps[0].VersionID) })
+		l.must(group+".Restore", func() (err error) { res, err = s.Restore(ctx, id, snaps[0].Name, snaps[0].VersionID); return err })
 	} else {
-		l.fails("Apps.Snapshots.Restore", "", func() error { return c.Apps.Snapshots.Restore(ctx, id, "sdk-live-missing", "0") })
+		l.fails(group+".Restore", "", func() error { _, err := s.Restore(ctx, id, "sdk-live-missing", "0"); return err })
+	}
+	state := func() (SnapshotRestoreState, error) { return s.RestoreState(ctx, id) }
+	st, ok := val(l, group+".RestoreState", state)
+	for end := time.Now().Add(10 * time.Minute); ok && res.Pending && st.State != "success" && st.State != "error"; {
+		if time.Now().After(end) || !wait(ctx, 10*time.Second) {
+			l.t.Errorf("%s.RestoreState: still %q after 10 minutes", group, st.State)
+			return
+		}
+		st, ok = val(l, group+".RestoreState", state)
+	}
+	switch {
+	case !ok:
+	case !slices.Contains([]string{"none", "queued", "running", "success", "error"}, st.State):
+		l.t.Errorf("%s.RestoreState: unknown state %q", group, st.State)
+	case st.State == "error":
+		l.t.Errorf("%s.RestoreState: restore failed with %s", group, st.Code)
+	default:
+		l.t.Logf("%s.RestoreState: %s (pending restore: %v)", group, st.State, res.Pending)
 	}
 }
 
@@ -724,7 +755,7 @@ func liveDatabase(l *liveRun, name string) {
 			"Databases.Get":              func() error { _, err := c.Databases.Get(ctx, id); return err },
 			"Databases.Status":           func() error { _, err := c.Databases.Status(ctx, id); return err },
 			"Databases.StatusRaw":        func() error { _, err := c.Databases.StatusRaw(ctx, id); return err },
-			"Databases.Metrics":          func() error { _, err := c.Databases.Metrics(ctx, id); return err },
+			"Databases.Metrics":          func() error { _, err := c.Databases.Metrics(ctx, id, ""); return err },
 			"Databases.Update":           func() error { return c.Databases.Update(ctx, id, DatabaseUpdate{Name: name + "-u"}) },
 			"Databases.Certificate":      func() error { _, err := c.Databases.Certificate(ctx, id); return err },
 			"Databases.ResetCredentials": func() error { _, err := c.Databases.ResetCredentials(ctx, id, ResetPassword); return err },
@@ -733,9 +764,11 @@ func liveDatabase(l *liveRun, name string) {
 			"Databases.Snapshots.Create": func() error { _, err := c.Databases.Snapshots.Create(ctx, id); return err },
 			"Databases.Snapshots.List":   func() error { _, err := c.Databases.Snapshots.List(ctx, id); return err },
 			"Databases.Snapshots.Restore": func() error {
-				return c.Databases.Snapshots.Restore(ctx, id, "sdk-live-missing", "0")
+				_, err := c.Databases.Snapshots.Restore(ctx, id, "sdk-live-missing", "0")
+				return err
 			},
-			"Databases.Delete": func() error { return c.Databases.Delete(ctx, id) },
+			"Databases.Snapshots.RestoreState": func() error { _, err := c.Databases.Snapshots.RestoreState(ctx, id); return err },
+			"Databases.Delete":                 func() error { return c.Databases.Delete(ctx, id) },
 		} {
 			either(op, f)
 		}
@@ -754,7 +787,8 @@ func liveDatabase(l *liveRun, name string) {
 		l.t.Errorf("Databases.Get: got %s %q", d.ID, d.Type)
 	}
 	val(l, "Databases.StatusRaw", func() (RuntimeStatsRaw, error) { return c.Databases.StatusRaw(ctx, id) })
-	val(l, "Databases.Metrics", func() ([]MetricPoint, error) { return c.Databases.Metrics(ctx, id) })
+	val(l, "Databases.Metrics", func() ([]MetricPoint, error) { return c.Databases.Metrics(ctx, id, "") })
+	val(l, "Databases.Metrics", func() ([]MetricPoint, error) { return c.Databases.Metrics(ctx, id, "7d") })
 	l.must("Databases.Update", func() error { return c.Databases.Update(ctx, id, DatabaseUpdate{Name: name + "-u"}) })
 	if d, ok := val(l, "Databases.Get", func() (Database, error) { return c.Databases.Get(ctx, id) }); ok && d.Name != name+"-u" {
 		l.t.Errorf("Databases.Update: name is %q", d.Name)
@@ -771,7 +805,8 @@ func liveDatabase(l *liveRun, name string) {
 	// Starting a started database is a success or a typed 409.
 	if err := l.do("Databases.Start", func() error { return c.Databases.Start(ctx, id) }); err == nil {
 		l.t.Log("Databases.Start again: success")
-	} else if e := (*APIError)(nil); errors.As(err, &e) && e.Status == 409 && (e.Code == CodeContainerAlreadyStarted || e.Code == CodeActionFailed) {
+	} else if e := (*APIError)(nil); errors.As(err, &e) && e.Status == 409 &&
+		(e.Code == CodeContainerAlreadyStarted || e.Code == CodeActionFailed || e.Code == CodeRestoreInProgress) {
 		l.t.Logf("Databases.Start again: HTTP 409 %s", e.Code)
 	} else {
 		l.t.Errorf("Databases.Start again: %v", err)
@@ -787,12 +822,6 @@ func liveDatabase(l *liveRun, name string) {
 		}
 	}
 	snaps := listSnapshots(l, "Databases.Snapshots.List", snapped && snap.Pending, func() ([]Snapshot, error) { return c.Databases.Snapshots.List(ctx, id) })
-	if len(snaps) > 0 {
-		l.must("Databases.Snapshots.Restore", func() error {
-			return c.Databases.Snapshots.Restore(ctx, id, snaps[0].Name, snaps[0].VersionID)
-		})
-	} else {
-		l.fails("Databases.Snapshots.Restore", "", func() error { return c.Databases.Snapshots.Restore(ctx, id, "sdk-live-missing", "0") })
-	}
+	liveRestore(l, "Databases.Snapshots", snaps, c.Databases.Snapshots, id)
 	l.must("Databases.Delete", func() error { return c.Databases.Delete(ctx, id) })
 }

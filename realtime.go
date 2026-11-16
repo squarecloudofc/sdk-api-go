@@ -16,64 +16,87 @@ import (
 // tests can shrink it.
 var realtimePace = 5500 * time.Millisecond
 
-// RealtimeEvent is one server-sent event of Apps.Realtime.
+// RealtimeEvent is one event of a [Realtime] stream. Event names its kind,
+// and the kind decides which other fields are set:
 //
-//   - "system": Data is a code such as "REALTIME_CONNECTING | <sseId>",
-//     REALTIME_TIMEOUT, REALTIME_DISCONNECTED, REALTIME_RECONNECT or
-//     REALTIME_ERROR.
-//   - "logs": Line is the log line (stream-id byte removed), Stream is
+//   - "logs" is a line of output. Line holds the text, and Stream is
 //     "stdout" or "stderr".
-//   - "status": Status is never nil: the merged container state (each
-//     frame's top-level keys replace the previous values, across reconnects;
-//     a malformed frame leaves it unchanged). Data is the raw JSON frame.
-//   - "error": Data is a code such as CONTAINER_NOT_FOUND.
-//   - "message": a frame without an event field.
-//
-// Data is always the raw event data and ID the last event id ("" if none).
+//   - "status" is the application's resource usage. Status holds the full
+//     state. Each status event can carry only some of the values, so the SDK
+//     keeps the others from earlier events, across reconnects too. A
+//     malformed status event leaves the state unchanged.
+//   - "system" is a notice from the server. Data is a code such as
+//     REALTIME_CONNECTING, REALTIME_TIMEOUT, REALTIME_DISCONNECTED,
+//     REALTIME_RECONNECT or REALTIME_ERROR.
+//   - "error" is a problem with the application. Data is a code such as
+//     CONTAINER_NOT_FOUND.
+//   - "message" is an event the server sent without a kind.
 type RealtimeEvent struct {
-	Event  string
-	Data   string
-	ID     string
-	Stream string // logs only
-	Line   string // logs only
+	// Event is the kind of event, such as "logs" or "status".
+	Event string
+	// Data is the text of the event as the server sent it.
+	Data string
+	// ID is the id of the latest event on the current connection that carried
+	// one, or "" when none did.
+	ID string
+	// Stream is "stdout" or "stderr" on a logs event, and "" otherwise.
+	Stream string
+	// Line is the log text on a logs event, and "" otherwise.
+	Line string
+	// Status is the full resource usage on a status event, where it is never
+	// nil. It is nil on every other event.
 	Status *RealtimeStatus
 }
 
-// RealtimeStatus is the merged "status" frame. CPULimit is a number of cores
-// (e.g. 1 or 0.5); RAM is [usedMB, limitMB]; Uptime is the start time in
-// Unix ms; NetIO.New is bytes per second.
+// RealtimeStatus is the resource usage that a status [RealtimeEvent]
+// reports.
 type RealtimeStatus struct {
-	CPU      float64    `json:"cpu"`
-	CPULimit float64    `json:"cpuLimit"`
-	RAM      [2]float64 `json:"ram"`
-	Status   string     `json:"status"`
-	NetIO    NetIO      `json:"netIO"`
-	BlockIO  IOCounter  `json:"bIO"`
-	Uptime   int64      `json:"uptime"`
+	// CPU is the CPU usage in percent.
+	CPU float64 `json:"cpu"`
+	// CPULimit is the number of CPU cores allocated, such as 1 or 0.5.
+	CPULimit float64 `json:"cpuLimit"`
+	// RAM holds the memory in use and the memory limit, both in MB.
+	RAM [2]float64 `json:"ram"`
+	// Status is the state of the application, such as "running".
+	Status string `json:"status"`
+	// NetIO is the network traffic.
+	NetIO NetIO `json:"netIO"`
+	// BlockIO is the disk traffic, in bytes read and written.
+	BlockIO IOCounter `json:"bIO"`
+	// Uptime is when the application started, in Unix milliseconds.
+	Uptime int64 `json:"uptime"`
 }
 
-// IOCounter is a pair of input and output byte counters.
+// IOCounter is a pair of byte counts, one for each direction.
 type IOCounter struct {
 	In  float64 `json:"i"`
 	Out float64 `json:"o"`
 }
 
-// NetIO is the network I/O of RealtimeStatus: total bytes and, in New, bytes
-// per second.
+// NetIO is the network traffic of a [RealtimeStatus]. In and Out are the
+// total bytes received and sent, and New is the current rate in bytes per
+// second.
 type NetIO struct {
 	In  float64   `json:"i"`
 	Out float64   `json:"o"`
 	New IOCounter `json:"new"`
 }
 
-// Realtime reads Apps.Realtime. Call Next until it returns an error (io.EOF
-// when the server ends the stream, e.g. after the 10-minute TTL or right
-// after the REALTIME_DISCONNECTED event) and always
-// Close. A dropped connection, or a server-requested REALTIME_RECONNECT, is
-// reopened (waiting out the API's pace of one open per 5s, and the retry
-// backoff) until 3 reopens in a row deliver no logs or status event; Next
-// then returns an *APIError with CodeNetworkError wrapping the last read
-// error. Cancel ctx to stop.
+// Realtime is a live stream of an application's logs and resource usage,
+// opened with [AppsAPI.Realtime]. Call [Realtime.Next] in a loop until it
+// returns an error, and always call [Realtime.Close] when you are done.
+//
+// Next returns [io.EOF] when the stream ends normally, which happens after
+// the server's 10-minute limit or right after a REALTIME_DISCONNECTED event.
+// When the connection drops, or the server sends REALTIME_RECONNECT, the
+// stream reopens by itself. The API allows one open per application every 5
+// seconds, so a reopen waits until at least 5.5 seconds have passed since the
+// previous one. After 3 reopens in a row without a logs or status event, Next
+// returns an [*APIError] with code [CodeNetworkError] that wraps the last
+// error.
+//
+// Cancel the context passed to [AppsAPI.Realtime] to stop the stream at any
+// time. Next then returns the context's error, such as [context.Canceled].
 type Realtime struct {
 	ctx       context.Context
 	cancel    context.CancelFunc // ends the current connection
@@ -89,10 +112,15 @@ type Realtime struct {
 	done      bool // REALTIME_DISCONNECTED seen or Close called: never reopen
 }
 
-// Realtime opens the SSE feed of an application (5 per account, 30 per app).
-// The HTTP status is checked first, so 429 REALTIME_MAX_CONNECTIONS is
-// returned here as *APIError. The open is bounded by the client timeout until
-// the response headers arrive; the stream itself has no deadline besides ctx.
+// Realtime opens a live stream of the application's logs and resource usage.
+// See [Realtime] for how to read it, and [AppsAPI] for workspace
+// applications.
+//
+// When the stream cannot open, Realtime returns the error before any event.
+// You can have at most 5 streams open per account and 30 per application.
+// Past those limits it returns 429 REALTIME_MAX_CONNECTIONS or 429
+// REALTIME_MAX_CONNECTIONS_APP. The client timeout applies only until the
+// stream opens. After that, only ctx limits it.
 func (a AppsAPI) Realtime(ctx context.Context, appID string) (*Realtime, error) {
 	s := &Realtime{ctx: ctx, c: a.c, path: appPath(appID, "/realtime")}
 	if err := s.connect(); err != nil {
@@ -138,7 +166,7 @@ func (s *Realtime) open() error {
 		if err == nil {
 			_ = res.Body.Close()
 		}
-		e := s.c.localError(http.MethodGet, s.path, CodeTimeout, "no response headers within "+s.c.timeout.String())
+		e := s.c.localError(http.MethodGet, s.path, CodeTimeout, "The realtime stream did not open within "+s.c.timeout.String()+". Try again, or allow more time with WithTimeout.")
 		e.err = context.DeadlineExceeded
 		return e
 	}
@@ -150,8 +178,9 @@ func (s *Realtime) open() error {
 	return nil
 }
 
-// Close releases the connection. To interrupt a blocked Next from another
-// goroutine, cancel the ctx passed to Realtime instead.
+// Close ends the stream and releases its connection. To interrupt a Next call
+// that is waiting in another goroutine, cancel the context passed to
+// [AppsAPI.Realtime] instead.
 func (s *Realtime) Close() error {
 	s.done = true
 	s.cancel()
@@ -170,8 +199,9 @@ func (s *Realtime) reopen() error {
 	return s.connect()
 }
 
-// Next blocks until the next event. After REALTIME_DISCONNECTED or Close it
-// returns io.EOF.
+// Next waits for the next event and returns it. It returns [io.EOF] when the
+// server ends the stream, after a REALTIME_DISCONNECTED event, and after
+// [Realtime.Close]. See [Realtime] for reconnects and the other errors.
 func (s *Realtime) Next() (RealtimeEvent, error) {
 	if s.done {
 		return RealtimeEvent{}, io.EOF

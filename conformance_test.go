@@ -31,7 +31,7 @@ import (
 // unknown fields, and every 4xx/5xx example must come back as *APIError with
 // the example's status and code.
 
-const specVersion, specOps = "13.76.1", 67
+const specVersion, specOps = "14.54.0", 69
 
 // Out of SDK scope: codegen and GitHub's webhook.
 var notSDK = map[string]bool{"GET /v2/openapi.json": true, "POST /v2/git/webhook/{webhook}": true}
@@ -257,10 +257,11 @@ func confCases() []confCase {
 			return v(c.Account.Snapshots(ctx, SnapshotScopeDatabases))
 		}},
 		{name: "Service.Status", call: func(ctx context.Context, c *Client) (any, error) { return v(c.Service.Status(ctx)) }},
-		{name: "AI.Chat", b: `{"messages":[{"role":"user","content":"hi"}],"tool_choice":"auto","max_tokens":10,"temperature":0.2}`,
+		{name: "AI.Chat", b: `{"messages":[{"role":"user","content":"hi"}],"tool_choice":"auto","max_tokens":10,"max_completion_tokens":20,"temperature":0.2}`,
 			call: func(ctx context.Context, c *Client) (any, error) {
 				temp := 0.2
-				return v(c.AI.Chat(ctx, ChatRequest{Messages: []ChatMessage{{Role: "user", Content: "hi"}}, MaxTokens: 10, Temperature: &temp, ToolChoice: "auto"}))
+				return v(c.AI.Chat(ctx, ChatRequest{Messages: []ChatMessage{{Role: "user", Content: "hi"}}, MaxTokens: 10, MaxCompletionTokens: 20,
+					Temperature: &temp, ToolChoice: "auto"}))
 			}},
 		{name: "Apps.Create", call: func(ctx context.Context, c *Client) (any, error) { return v(c.Apps.Create(ctx, zip())) }},
 		{name: "Apps.Commit", q: "path=src", call: func(ctx context.Context, c *Client) (any, error) {
@@ -279,7 +280,7 @@ func confCases() []confCase {
 			return v(c.Apps.StatusAll(ctx, "0123456789ab4def8123456789abcdef"))
 		}},
 		{name: "Apps.Logs", call: func(ctx context.Context, c *Client) (any, error) { return v(c.Apps.Logs(ctx, id)) }},
-		{name: "Apps.Metrics", call: func(ctx context.Context, c *Client) (any, error) { return v(c.Apps.Metrics(ctx, id)) }},
+		{name: "Apps.Metrics", q: "range=7d", call: func(ctx context.Context, c *Client) (any, error) { return v(c.Apps.Metrics(ctx, id, "7d")) }},
 		{name: "Apps.Realtime", call: func(ctx context.Context, c *Client) (any, error) {
 			s, err := c.Apps.Realtime(ctx, id)
 			if err != nil {
@@ -340,8 +341,11 @@ func confCases() []confCase {
 		{name: "Apps.Snapshots.Create", call: func(ctx context.Context, c *Client) (any, error) { return v(c.Apps.Snapshots.Create(ctx, id)) }},
 		{name: "Apps.Snapshots.Restore", b: `{"snapshotId":"app1_javascript_manual","versionId":"` + version + `"}`,
 			call: func(ctx context.Context, c *Client) (any, error) {
-				return nil, c.Apps.Snapshots.Restore(ctx, id, "app1_javascript_manual", version)
+				return v(c.Apps.Snapshots.Restore(ctx, id, "app1_javascript_manual", version))
 			}},
+		{name: "Apps.Snapshots.RestoreState", call: func(ctx context.Context, c *Client) (any, error) {
+			return v(c.Apps.Snapshots.RestoreState(ctx, id))
+		}},
 		{name: "Apps.Network.Analytics",
 			q: "bot=Unverified&browser=Chrome&content_type=json&country=BR&end=2026-09-02T00%3A00%3A00Z&ip=1.1.1.1&os=Windows&path=%2Fapi" +
 				"&protocol=HTTP%2F2&provider=GOOGLE+%2815169%29&referer=google.com&start=2026-09-01T00%3A00%3A00Z&status=404",
@@ -380,7 +384,9 @@ func confCases() []confCase {
 			return v(c.Databases.StatusRaw(ctx, id))
 		}},
 		{name: "Databases.StatusAll", call: func(ctx context.Context, c *Client) (any, error) { return v(c.Databases.StatusAll(ctx)) }},
-		{name: "Databases.Metrics", call: func(ctx context.Context, c *Client) (any, error) { return v(c.Databases.Metrics(ctx, id)) }},
+		{name: "Databases.Metrics", q: "range=7d", call: func(ctx context.Context, c *Client) (any, error) {
+			return v(c.Databases.Metrics(ctx, id, "7d"))
+		}},
 		{name: "Databases.Certificate", call: func(ctx context.Context, c *Client) (any, error) { return v(c.Databases.Certificate(ctx, id)) }},
 		{name: "Databases.ResetCredentials", b: `{"reset":"password"}`, call: func(ctx context.Context, c *Client) (any, error) {
 			return v(c.Databases.ResetCredentials(ctx, id, ResetPassword))
@@ -391,8 +397,11 @@ func confCases() []confCase {
 		}},
 		{name: "Databases.Snapshots.Restore", b: `{"snapshotId":"db1_mongo","versionId":"` + version + `"}`,
 			call: func(ctx context.Context, c *Client) (any, error) {
-				return nil, c.Databases.Snapshots.Restore(ctx, id, "db1_mongo", version)
+				return v(c.Databases.Snapshots.Restore(ctx, id, "db1_mongo", version))
 			}},
+		{name: "Databases.Snapshots.RestoreState", call: func(ctx context.Context, c *Client) (any, error) {
+			return v(c.Databases.Snapshots.RestoreState(ctx, id))
+		}},
 		{name: "Workspaces.List", call: func(ctx context.Context, c *Client) (any, error) { return v(c.Workspaces.List(ctx)) }},
 		{name: "Workspaces.Get", call: func(ctx context.Context, c *Client) (any, error) { return v(c.Workspaces.Get(ctx, id)) }},
 		{name: "Workspaces.Create", b: `{"name":"Acme"}`, call: func(ctx context.Context, c *Client) (any, error) {
@@ -645,6 +654,9 @@ func checkDecoded(got any, ex example, check func(bool, string, ...any)) {
 		if x.Pending {
 			return
 		}
+	case SnapshotRestored: // 200 {"status":"success"} or 202 SNAPSHOT_RESTORE_PROCESSING
+		check(x.Pending == (ex.status == http.StatusAccepted), "%d %s: Pending %v", ex.status, ex.name, x.Pending)
+		return
 	case LinkedRepository:
 		var r struct{ Repository json.RawMessage }
 		_ = json.Unmarshal(payload, &r)
@@ -665,6 +677,21 @@ func checkDecoded(got any, ex example, check func(bool, string, ...any)) {
 	dec.DisallowUnknownFields()
 	err := dec.Decode(reflect.New(typ).Interface())
 	check(err == nil, "%d %s: example does not strictly decode into %v: %v", ex.status, ex.name, typ, err)
+}
+
+// SDK-STANDARD 3, rule 3: a key without snapshots:read gets a 200 snapshot
+// create with an empty response (no spec example shows it). It is done, not
+// pending, with URL and Key empty, the same in all three SDKs.
+func TestSnapshotCreateEmptyResponse(t *testing.T) {
+	for _, body := range []string{`{"status":"success"}`, `{"status":"success","response":{}}`} {
+		c := testClient(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, body) })
+		for _, s := range []SnapshotsAPI{c.Apps.Snapshots, c.Databases.Snapshots} {
+			got, err := s.Create(context.Background(), "id1")
+			if err != nil || got != (SnapshotCreated{Pending: false, URL: "", Key: ""}) {
+				t.Fatalf("%s: %+v %v", body, got, err)
+			}
+		}
+	}
 }
 
 // The public surface is exactly the case table: every exported method of
@@ -723,7 +750,8 @@ func TestErrorCodeConstants(t *testing.T) {
 	if len(enum) == 0 {
 		t.Fatal("spec has no ErrorCode enum")
 	}
-	sdkOnly := map[string]bool{CodeNetworkError: true, CodeTimeout: true, CodeUnknown: true, CodeInvalidAPIKey: true, CodeRateLimit: true, CodeRateLimitExceeded: true}
+	sdkOnly := map[string]bool{CodeNetworkError: true, CodeTimeout: true, CodeUnknown: true, CodeInvalidAPIKey: true,
+		CodeRateLimit: true, CodeRateLimitExceeded: true, CodeMetricsNotSupported: true} // the last three are deprecated
 	// Listed in the enum, but only an internal (non-public) route sends them.
 	internal := map[string]bool{"SUBDOMAIN_TAKEN": true, "DEPLOY_FAILED": true}
 	for _, c := range enum {
