@@ -297,7 +297,7 @@ if errors.As(err, &apiErr) && apiErr.Code == squarecloud.CodeMissingScope {
 ## Development
 
 ```bash
-gofmt -l . && go vet ./... && go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+gofmt -l . && go vet ./... && go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 go test -race -count=1 ./...   # offline, against a local test server only
 ```
 
